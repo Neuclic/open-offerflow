@@ -1,0 +1,40 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local data
+*.sqlite
+*.sqlite3
+*.db
+data/
+diagrams/
+
+# Logs
+*.log
+logs/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

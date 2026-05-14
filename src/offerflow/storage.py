@@ -154,6 +154,55 @@ def list_sources(base_dir: Path | None = None) -> list[dict[str, Any]]:
         conn.close()
 
 
+def start_crawl_run(
+    base_dir: Path | None = None,
+    *,
+    crawl_run_id: str,
+    source_id: str | None = None,
+    company_id: str | None = None,
+    channel: str | None = None,
+) -> None:
+    conn = connect(base_dir)
+    try:
+        conn.execute(
+            """
+            INSERT INTO crawl_runs(crawl_run_id, source_id, company_id, channel, status, started_at)
+            VALUES (?, ?, ?, ?, 'running', ?)
+            """,
+            (crawl_run_id, source_id, company_id, channel, utc_now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def finish_crawl_run(
+    base_dir: Path | None = None,
+    *,
+    crawl_run_id: str,
+    status: str,
+    jobs_seen: int = 0,
+    jobs_changed: int = 0,
+    jobs_failed: int = 0,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    conn = connect(base_dir)
+    try:
+        conn.execute(
+            """
+            UPDATE crawl_runs
+            SET status = ?, finished_at = ?, jobs_seen = ?, jobs_changed = ?,
+                jobs_failed = ?, error_code = ?, error_message = ?
+            WHERE crawl_run_id = ?
+            """,
+            (status, utc_now(), jobs_seen, jobs_changed, jobs_failed, error_code, error_message, crawl_run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def list_jobs(
     base_dir: Path | None = None,
     *,
@@ -451,5 +500,133 @@ def show_job(base_dir: Path | None, job_id: str, *, with_extraction: bool = Fals
             ).fetchone()
             result["latest_extraction"] = dict(extraction) if extraction else None
         return result
+    finally:
+        conn.close()
+
+
+def list_pending_html_extractions(
+    base_dir: Path | None = None,
+    *,
+    extractor: str,
+    llm_profile: str,
+    include_failed: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    failed_clause = ""
+    if include_failed:
+        failed_clause = """
+        OR EXISTS (
+            SELECT 1
+            FROM job_extractions failed
+            WHERE failed.snapshot_id = js.snapshot_id
+              AND failed.extractor = ?
+              AND failed.llm_profile = ?
+              AND failed.status = 'failed'
+              AND failed.attempt_count < 2
+        )
+        """
+    params: list[Any] = [extractor, llm_profile]
+    if include_failed:
+        params.extend([extractor, llm_profile])
+    params.append(limit)
+
+    conn = connect(base_dir)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT j.job_id, j.title, j.detail_url, js.snapshot_id, js.raw_payload, js.raw_payload_type
+            FROM jobs j
+            JOIN job_snapshots js ON js.snapshot_id = j.current_snapshot_id
+            WHERE js.raw_payload_type = 'html'
+              AND (
+                NOT EXISTS (
+                    SELECT 1
+                    FROM job_extractions succeeded
+                    WHERE succeeded.snapshot_id = js.snapshot_id
+                      AND succeeded.extractor = ?
+                      AND succeeded.llm_profile = ?
+                      AND succeeded.status = 'succeeded'
+                )
+                {failed_clause}
+              )
+            ORDER BY js.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def latest_failed_attempt_count(
+    base_dir: Path | None = None,
+    *,
+    snapshot_id: str,
+    extractor: str,
+    llm_profile: str,
+) -> int:
+    conn = connect(base_dir)
+    try:
+        row = conn.execute(
+            """
+            SELECT attempt_count
+            FROM job_extractions
+            WHERE snapshot_id = ? AND extractor = ? AND llm_profile = ? AND status = 'failed'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (snapshot_id, extractor, llm_profile),
+        ).fetchone()
+        return int(row["attempt_count"]) if row else 0
+    finally:
+        conn.close()
+
+
+def record_extraction(
+    base_dir: Path | None = None,
+    *,
+    job_id: str,
+    snapshot_id: str,
+    extractor: str,
+    extractor_version: str | None,
+    llm_profile: str | None,
+    model: str | None,
+    status: str,
+    output_markdown: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    attempt_count: int = 1,
+) -> str:
+    extraction_id = f"ext_{hashlib.sha256(f'{job_id}:{snapshot_id}:{extractor}:{utc_now()}'.encode('utf-8')).hexdigest()[:16]}"
+    conn = connect(base_dir)
+    try:
+        conn.execute(
+            """
+            INSERT INTO job_extractions(
+                extraction_id, job_id, snapshot_id, extractor, extractor_version,
+                llm_profile, model, status, output_markdown, error_code,
+                error_message, attempt_count, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                extraction_id,
+                job_id,
+                snapshot_id,
+                extractor,
+                extractor_version,
+                llm_profile,
+                model,
+                status,
+                output_markdown,
+                error_code,
+                error_message,
+                attempt_count,
+                utc_now(),
+            ),
+        )
+        conn.commit()
+        return extraction_id
     finally:
         conn.close()

@@ -7,6 +7,8 @@ from typing import Any
 import typer
 
 from offerflow.config import ensure_default_config, load_config, load_env_file
+from offerflow.crawl import run_crawl
+from offerflow.extract import run_extract
 from offerflow.errors import ErrorCode, OfferFlowError
 from offerflow.output import dumps, error_envelope, success_envelope
 from offerflow.paths import db_path
@@ -18,8 +20,12 @@ from offerflow.timeutils import parse_since
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 sources_app = typer.Typer(add_completion=False, no_args_is_help=True)
 jobs_app = typer.Typer(add_completion=False, no_args_is_help=True)
+crawl_app = typer.Typer(add_completion=False, no_args_is_help=True)
+extract_app = typer.Typer(add_completion=False, no_args_is_help=True)
 app.add_typer(sources_app, name="sources")
 app.add_typer(jobs_app, name="jobs")
+app.add_typer(crawl_app, name="crawl")
+app.add_typer(extract_app, name="extract")
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -86,6 +92,56 @@ def sources_list() -> None:
         return {"sources": storage_list_sources()}
 
     run_json("sources list", action)
+
+
+@crawl_app.command("run")
+def crawl_run(
+    all_sources: bool = typer.Option(False, "--all"),
+    company: str | None = typer.Option(None, "--company"),
+    source: str | None = typer.Option(None, "--source"),
+    channel: str | None = typer.Option(None, "--channel"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=500),
+) -> None:
+    def action() -> dict[str, Any]:
+        result = run_crawl(
+            all_sources=all_sources,
+            company=company,
+            source=source,
+            channel=channel,
+            dry_run=dry_run,
+            limit=limit,
+        )
+        if result["partial_failure"]:
+            raise OfferFlowError(
+                ErrorCode.FETCH_FAILED,
+                "One or more sources failed during crawl.",
+                result,
+                exit_code=2,
+            )
+        return result
+
+    run_json("crawl run", action)
+
+
+@extract_app.command("run")
+def extract_run(
+    pending: bool = typer.Option(False, "--pending"),
+    failed: bool = typer.Option(False, "--failed"),
+    limit: int = typer.Option(50, "--limit", min=1, max=500),
+) -> None:
+    def action() -> dict[str, Any]:
+        result = run_extract(pending=pending, failed=failed, limit=limit)
+        if result["failed"]:
+            raise OfferFlowError(
+                ErrorCode.EXTRACT_FAILED,
+                "One or more extraction jobs failed.",
+                result,
+                exit_code=2,
+            )
+        return result
+
+    run_json("extract run", action)
 
 
 @jobs_app.command("list")

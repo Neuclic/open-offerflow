@@ -27,6 +27,7 @@ yarn-error.log*
 *.sqlite3
 *.db
 data/
+.offerflow/
 diagrams/
 
 # Logs

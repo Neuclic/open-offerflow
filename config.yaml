@@ -1,0 +1,10 @@
+llm_profiles:
+  default:
+    provider: openai-compatible
+    base_url: https://api.deepseek.com
+    model: deepseek-v4-flash
+    api_key_env: DEEPSEEK_API_KEY
+
+extractor:
+  provider: mineru-html
+  llm_profile: default
